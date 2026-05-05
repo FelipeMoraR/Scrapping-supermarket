@@ -35,7 +35,7 @@ def scrape_all_pages(base_url: str, alive_proxies: list[str]) -> list[dict]:
 
             try:
                 print("Downloading and executing js of DOM...")
-                WebDriverWait(driver, 80).until(
+                WebDriverWait(driver, 5).until(
                     EC.presence_of_element_located((By.CSS_SELECTOR, "[data-cnstrc-item-price]"))
                 )
             except Exception as e:

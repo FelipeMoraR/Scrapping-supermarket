@@ -2,5 +2,5 @@
 python -m venv .venv
 .venv\Scripts\activate.bat
 
-//NOTE - Libraries
-pip install selenium webdriver-manager requests beautifulsoup4 lxml
+//NOTE - page to use proxies
+https://free-proxy-list.net/es/

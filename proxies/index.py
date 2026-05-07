@@ -2,6 +2,8 @@ from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, as_compl
 import requests
 import os
 
+# TODO validate how much time spend to request a proxy to avoid the slowest ones
+
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
 RESOURCES  = os.path.join(BASE_DIR, '..', 'resources')
 

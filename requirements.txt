@@ -3,3 +3,5 @@ webdriver-manager
 requests 
 beautifulsoup4 
 lxml
+python-dotenv
+pymongo

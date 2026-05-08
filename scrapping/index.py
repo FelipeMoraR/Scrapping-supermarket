@@ -9,14 +9,20 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from bs4 import BeautifulSoup
 import itertools
 from proxies.index import check_proxy
-    
-def scrape_all_pages(listObjs: list[dict], alive_proxies: list[str]) -> list[dict]:
-    all_supermarket_products = []
+import threading
+import os
 
-    # Cada URL corre en su propio thread
+class ScrapingCancelledError(Exception):
+    pass
+
+def scrape_all_pages(listObjs: list[dict], alive_proxies: list[str]) -> list[dict]:
+    print('listObjs::: ', listObjs)
+    all_supermarket_products = []
+    cancel_event = threading.Event()  # 👈 compartido entre todos los threads
+
     with ThreadPoolExecutor(max_workers=len(listObjs)) as executor:
         futures = {
-            executor.submit(scrape_page, obj["url"], obj["supermarket"], alive_proxies): obj
+            executor.submit(scrape_page, obj["url"], obj["supermarket"], alive_proxies, cancel_event): obj
             for obj in listObjs
         }
 
@@ -26,12 +32,16 @@ def scrape_all_pages(listObjs: list[dict], alive_proxies: list[str]) -> list[dic
                 products = future.result()
                 print(f"  ✓ {obj['supermarket']} → {len(products)} products")
                 all_supermarket_products.extend(products)
+            except ScrapingCancelledError:
+                print(f"  ⚠ {obj['supermarket']} → cancelado por fallo en otro thread")
             except Exception as e:
                 print(f"  ✗ {obj['supermarket']} → failed: {e}")
+                cancel_event.set()  # 👈 cancela todos si hay error inesperado
 
-    return all_supermarket_products 
+    return all_supermarket_products
 
-def scrape_page(base_url: str, supermarket: str, alive_proxies: list[str]) -> list[dict]:
+
+def scrape_page(base_url: str, supermarket: str, alive_proxies: list[str], cancel_event: threading.Event) -> list[dict]:
     all_products = []
     page = 1
     ROTATE_EVERY = 1
@@ -50,6 +60,10 @@ def scrape_page(base_url: str, supermarket: str, alive_proxies: list[str]) -> li
                 driver = get_driver(proxy=current_proxy)
                 print(f"  Rotated to: {current_proxy}")
 
+            if cancel_event.is_set():
+                print(f"  ⚠ {supermarket} — cancelado, saliendo...")
+                raise ScrapingCancelledError(f"Cancelado por fallo en otro scraper")
+
             url = f"{base_url}?page={page}" if page > 1 else base_url
             print(f'Scraping page {page} — {url}')
 
@@ -64,8 +78,7 @@ def scrape_page(base_url: str, supermarket: str, alive_proxies: list[str]) -> li
                     EC.presence_of_element_located((By.CSS_SELECTOR, "[data-cnstrc-item-price]"))
                 )
             except TimeoutException:
-                # Guardar screenshot para ver qué muestra el browser
-                driver.save_screenshot(f"error_page_{page}.png")
+                cancel_event.set()
 
                 os.makedirs("error", exist_ok=True)
                 driver.save_screenshot(os.path.join("error", f"error_page_{page}.png"))
@@ -75,6 +88,8 @@ def scrape_page(base_url: str, supermarket: str, alive_proxies: list[str]) -> li
                 break
 
             except WebDriverException as e:
+                cancel_event.set()
+
                 print(f'  WebDriver error: {e.msg}')  # .msg es más limpio que el stacktrace completo
                 break
 
@@ -85,8 +100,11 @@ def scrape_page(base_url: str, supermarket: str, alive_proxies: list[str]) -> li
                 unwanted.decompose()
 
             products = soup.select('.shelf-content [data-cnstrc-item-price]')
+            print('producs searched::: ', len(products))
 
             if not products:
+                os.makedirs("log", exist_ok=True)
+                driver.save_screenshot(os.path.join("log", f"no_products_page_{page}.png"))
                 break
 
             all_products.extend([
@@ -100,9 +118,13 @@ def scrape_page(base_url: str, supermarket: str, alive_proxies: list[str]) -> li
             ])
 
             next_page = soup.select_one(f".seo-paginator-slides [aria-label='Página {page + 1}']")
-            print('next_page:::', next_page)
-
+            print("---------------------")
+            print(supermarket, 'next_page:::', next_page)
+            print("---------------------")
+            
             if not next_page:
+                os.makedirs("log", exist_ok=True)
+                driver.save_screenshot(os.path.join("log", f"no_more_pages_page{page}.png"))
                 print('No more pages.')
                 break
 
@@ -116,12 +138,83 @@ def scrape_page(base_url: str, supermarket: str, alive_proxies: list[str]) -> li
 
     return all_products
 
+
+def scrape_lider_supermarket(base_url: str, supermarket: str, alive_proxies: list[str], cancel_event: threading.Event) -> list[dict]:
+    all_products = []
+    page = 1
+    ROTATE_EVERY = 1
+
+    # REVIEW What do this?
+    proxy_cycle = itertools.cycle(alive_proxies) if alive_proxies else None
+    current_proxy = next(proxy_cycle) if proxy_cycle else None
+    
+    driver = get_driver(proxy=current_proxy)
+
+    try:
+        while True:
+            if page > 1 and page % ROTATE_EVERY == 0 and proxy_cycle:
+                driver.quit()
+                current_proxy = next(proxy_cycle)
+                driver = get_driver(proxy=current_proxy)
+                print(f"  Rotated to: {current_proxy}")
+
+            if cancel_event.is_set():
+                print(f"  ⚠ {supermarket} — cancelado, saliendo...")
+                raise ScrapingCancelledError(f"Cancelado por fallo en otro scraper")
+
+            # NOTE main page of lider
+            driver.get(base_url)
+
+            try:
+                WebDriverWait(driver, 20).until(
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "[data-testid='HubSpokesNxM']"))
+                )
+            except TimeoutException:
+                print(f'  Timeout on page {page} — title: {driver.title}')
+                cancel_event.set()
+
+                os.makedirs("error", exist_ok=True)
+                driver.save_screenshot(os.path.join("error", f"error_page_{page}.png"))
+                with open(os.path.join("error", f"error_page_{page}.html"), "w", encoding="utf-8") as f:
+                    f.write(driver.page_source)
+                
+                break
+
+            except WebDriverException as e:
+                cancel_event.set()
+
+                print(f'  WebDriver error: {e.msg}')  # .msg es más limpio que el stacktrace completo
+                break
+
+            soup = BeautifulSoup(driver.page_source, 'lxml')
+
+            
+
+            containerCategories = soup.select("[data-testid='HubSpokesNxM']")
+            print('containerCategories searched::: ', len(containerCategories))
+
+            if not products:
+                os.makedirs("log", exist_ok=True)
+                driver.save_screenshot(os.path.join("log", f"no_products_page_{page}.png"))
+                break
+    finally:
+        driver.quit()                             # ← siempre se ejecuta, incluso con error
+
+    return all_products
+
 def get_driver(proxy: str = None) -> webdriver.Chrome:
     opts = webdriver.ChromeOptions()
-    opts.add_argument("--headless")
+
+    opts.add_argument("--headless=new")  # use new headless mode
     opts.add_argument("--no-sandbox")
     opts.add_argument("--disable-dev-shm-usage")
     opts.add_argument("--disable-blink-features=AutomationControlled")
+    opts.add_argument("--window-size=1920,1080")
+    opts.add_argument(
+        "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    )
     opts.add_experimental_option("excludeSwitches", ["enable-automation"])
     opts.add_experimental_option("useAutomationExtension", False)
 
@@ -133,9 +226,21 @@ def get_driver(proxy: str = None) -> webdriver.Chrome:
         else:
             print(f"  Driver using direct IP")
 
-    return webdriver.Chrome(
+    driver = webdriver.Chrome(
         service=Service(ChromeDriverManager().install()), options=opts
     )
+
+    # Patch navigator.webdriver via CDP — this is the key step
+    driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+        "source": """
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+            window.chrome = { runtime: {} };
+            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3] });
+            Object.defineProperty(navigator, 'languages', { get: () => ['es-CL', 'es'] });
+        """
+    })
+
+    return driver
 
 def get_proxy_or_direct(proxy: str) -> dict | None:
     result = check_proxy(proxy) #NOTE Segunda validacion en caso de que ya haya expirado el proxy

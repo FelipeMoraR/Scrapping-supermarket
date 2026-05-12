@@ -5,6 +5,7 @@ FROM python:3.12-slim
 RUN apt-get update && apt-get install -y \
     chromium \
     chromium-driver \
+    xvfb \
     --no-install-recommends && \
     rm -rf /var/lib/apt/lists/*
 
@@ -25,4 +26,4 @@ ENV DISPLAY=:99
 RUN chromium --version && chromedriver --version
 
 # Run the application
-CMD ["python", "index.py"]
+CMD ["sh", "-c", "Xvfb :99 -screen 0 1920x1080x24 -ac & sleep 2 && python index.py"]

@@ -21,7 +21,6 @@ HEADERS  = {"User-Agent": "Mozilla/5.0 (compatible; HN-Scraper/1.0)"}
 #print("valid_proxies::: ", valid_proxies)
 
 def save_to_csv(products: list[dict], filename: str = None) -> None:
-
     if not products:
         print("No products to save.")
         return
@@ -41,8 +40,8 @@ def save_to_csv(products: list[dict], filename: str = None) -> None:
     print(f"  CSV saved → {filename} ({len(products)} products)")
 
 try:
-    products = scrape_all_pages([{ 'url': URL_JUMBO, 'supermarket': 'jumbo' }, { 'url': URL_SANTAISABEL, 'supermarket': 'santa-isabel' }], [])
-    #test = scrape_all_pages([{ 'url': URL_LIDER, 'supermarket': 'lider' }], [])
+    #products = scrape_all_pages([{ 'url': URL_JUMBO, 'supermarket': 'jumbo' }, { 'url': URL_SANTAISABEL, 'supermarket': 'santa-isabel' }], [])
+    products = scrape_all_pages([{ 'url': URL_LIDER, 'supermarket': 'lider' }], [])
 
     save_to_csv(products)
 except Exception as e:

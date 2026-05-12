@@ -12,6 +12,11 @@ from proxies.index import check_proxy
 import threading
 import os
 from datetime import datetime
+import time
+import undetected_chromedriver as uc
+
+
+# NOTE Save the errors in mongo
 
 class ScrapingCancelledError(Exception):
     pass
@@ -23,7 +28,7 @@ def scrape_all_pages(listObjs: list[dict], alive_proxies: list[str]) -> list[dic
 
     with ThreadPoolExecutor(max_workers=len(listObjs)) as executor:
         futures = {
-            executor.submit(scrape_page, obj["url"], obj["supermarket"], alive_proxies, cancel_event): obj
+            executor.submit(thread_control, obj["url"], obj["supermarket"], alive_proxies, cancel_event): obj
             for obj in listObjs
         }
 
@@ -41,6 +46,16 @@ def scrape_all_pages(listObjs: list[dict], alive_proxies: list[str]) -> list[dic
 
     return all_supermarket_products
 
+
+def thread_control(base_url: str, supermarket: str, alive_proxies: list[str], cancel_event: threading.Event) -> list[dict]:
+    all_products = []
+    if supermarket == 'lider':
+        products = scrape_lider_supermarket(base_url, supermarket, alive_proxies, cancel_event)
+        all_products.extend(products)
+    else:
+        products = scrape_page(base_url, supermarket, alive_proxies, cancel_event)
+        all_products.extend(products)
+    return all_products
 
 def scrape_page(base_url: str, supermarket: str, alive_proxies: list[str], cancel_event: threading.Event) -> list[dict]:
     all_products = []
@@ -150,14 +165,14 @@ def scrape_lider_supermarket(base_url: str, supermarket: str, alive_proxies: lis
     proxy_cycle = itertools.cycle(alive_proxies) if alive_proxies else None
     current_proxy = next(proxy_cycle) if proxy_cycle else None
     
-    driver = get_driver(proxy=current_proxy)
+    driver = get_driver_lider(proxy=current_proxy)
 
     try:
         while True:
             if page > 1 and page % ROTATE_EVERY == 0 and proxy_cycle:
                 driver.quit()
                 current_proxy = next(proxy_cycle)
-                driver = get_driver(proxy=current_proxy)
+                driver = get_driver_lider(proxy=current_proxy)
                 print(f"  Rotated to: {current_proxy}")
 
             if cancel_event.is_set():
@@ -166,6 +181,7 @@ def scrape_lider_supermarket(base_url: str, supermarket: str, alive_proxies: lis
 
             # NOTE main page of lider
             driver.get(base_url)
+            time.sleep(3)
 
             try:
                 WebDriverWait(driver, 20).until(
@@ -181,7 +197,6 @@ def scrape_lider_supermarket(base_url: str, supermarket: str, alive_proxies: lis
                     f.write(driver.page_source)
                 
                 break
-
             except WebDriverException as e:
                 cancel_event.set()
 
@@ -189,8 +204,6 @@ def scrape_lider_supermarket(base_url: str, supermarket: str, alive_proxies: lis
                 break
 
             soup = BeautifulSoup(driver.page_source, 'lxml')
-
-            
 
             containerCategories = soup.select("[data-testid='HubSpokesNxM']")
             print('containerCategories searched::: ', len(containerCategories))
@@ -219,8 +232,14 @@ def get_driver(proxy: str = None) -> webdriver.Chrome:
     )
     opts.add_experimental_option("excludeSwitches", ["enable-automation"])
     opts.add_experimental_option("useAutomationExtension", False)
-
     opts.binary_location = "/usr/bin/chromium" #Docker
+
+    opts.add_argument("--disable-gpu")
+    opts.add_argument("--lang=es-CL")
+    opts.add_argument("--disable-extensions")
+    # Simular pantalla real
+    opts.add_argument("--window-size=1920,1080")
+    opts.add_argument("--start-maximized")
 
     if proxy:
         validated = get_proxy_or_direct(proxy)
@@ -239,11 +258,35 @@ def get_driver(proxy: str = None) -> webdriver.Chrome:
     driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
         "source": """
             Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-            window.chrome = { runtime: {} };
-            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3] });
+            window.chrome = { runtime: {}, loadTimes: () => {}, csi: () => {}, app: {} };
+            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
             Object.defineProperty(navigator, 'languages', { get: () => ['es-CL', 'es'] });
+            Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
+            Object.defineProperty(screen, 'colorDepth', { get: () => 24 });
         """
     })
+
+    return driver
+
+def get_driver_lider(proxy: str = None) -> uc.Chrome:
+    opts = uc.ChromeOptions()
+
+    #opts.add_argument("--headless=new")
+    opts.add_argument("--no-sandbox")
+    opts.add_argument("--disable-dev-shm-usage")
+    opts.add_argument("--window-size=1920,1080")
+    opts.add_argument("--lang=es-CL")
+
+    if proxy:
+        validated = get_proxy_or_direct(proxy)
+        if validated:
+            opts.add_argument(f"--proxy-server=http://{proxy}")
+
+    driver = uc.Chrome(
+        options=opts,
+        driver_executable_path="/usr/bin/chromedriver",  # Docker
+        browser_executable_path="/usr/bin/chromium",     # Docker
+    )
 
     return driver
 

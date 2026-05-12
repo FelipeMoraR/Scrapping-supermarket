@@ -1,0 +1,3 @@
+\\POWERSHELL\\
+docker build -t scrapping-supermarket .
+docker run --rm -v "${PWD}\output:/app/output" scrapping-supermarket => PWD is the folder where you are stand

@@ -21,6 +21,7 @@ HEADERS  = {"User-Agent": "Mozilla/5.0 (compatible; HN-Scraper/1.0)"}
 #print("valid_proxies::: ", valid_proxies)
 
 def save_to_csv(products: list[dict], filename: str = None) -> None:
+
     if not products:
         print("No products to save.")
         return
@@ -33,7 +34,7 @@ def save_to_csv(products: list[dict], filename: str = None) -> None:
         filename = f"output/products_{timestamp}.csv"
 
     with open(filename, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=["id", "name", "price", "supermarket"])
+        writer = csv.DictWriter(f, fieldnames=["id", "name", "price", "supermarket", "date"])
         writer.writeheader()
         writer.writerows(products)
 

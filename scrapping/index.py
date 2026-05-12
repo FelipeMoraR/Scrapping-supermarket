@@ -3,7 +3,7 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from webdriver_manager.chrome import ChromeDriverManager
+#from webdriver_manager.chrome import ChromeDriverManager
 from selenium.common.exceptions import TimeoutException, WebDriverException
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from bs4 import BeautifulSoup
@@ -11,6 +11,7 @@ import itertools
 from proxies.index import check_proxy
 import threading
 import os
+from datetime import datetime
 
 class ScrapingCancelledError(Exception):
     pass
@@ -18,7 +19,7 @@ class ScrapingCancelledError(Exception):
 def scrape_all_pages(listObjs: list[dict], alive_proxies: list[str]) -> list[dict]:
     print('listObjs::: ', listObjs)
     all_supermarket_products = []
-    cancel_event = threading.Event()  # 👈 compartido entre todos los threads
+    cancel_event = threading.Event()
 
     with ThreadPoolExecutor(max_workers=len(listObjs)) as executor:
         futures = {
@@ -113,6 +114,7 @@ def scrape_page(base_url: str, supermarket: str, alive_proxies: list[str], cance
                     "name":  p.get("data-cnstrc-item-name"),
                     "price": p.get("data-cnstrc-item-price"),
                     "supermarket": supermarket,
+                    "date": datetime.now().isoformat()
                 }
                 for p in products
             ])
@@ -128,7 +130,7 @@ def scrape_page(base_url: str, supermarket: str, alive_proxies: list[str], cance
                 print('No more pages.')
                 break
 
-            if page == 10:                        # ← mover al final antes de page += 1
+            if page == 2:                        # ← mover al final antes de page += 1
                 print('Reached page limit.')
                 break
 
@@ -218,6 +220,8 @@ def get_driver(proxy: str = None) -> webdriver.Chrome:
     opts.add_experimental_option("excludeSwitches", ["enable-automation"])
     opts.add_experimental_option("useAutomationExtension", False)
 
+    opts.binary_location = "/usr/bin/chromium" #Docker
+
     if proxy:
         validated = get_proxy_or_direct(proxy)
         if validated:
@@ -227,7 +231,8 @@ def get_driver(proxy: str = None) -> webdriver.Chrome:
             print(f"  Driver using direct IP")
 
     driver = webdriver.Chrome(
-        service=Service(ChromeDriverManager().install()), options=opts
+        #service=Service(ChromeDriverManager().install()), options=opts
+        service=Service("/usr/bin/chromedriver"), options=opts #Docker
     )
 
     # Patch navigator.webdriver via CDP — this is the key step

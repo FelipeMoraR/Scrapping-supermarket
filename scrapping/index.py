@@ -14,9 +14,11 @@ import os
 from datetime import datetime
 import time
 import undetected_chromedriver as uc
+import random
+import uuid
 
-
-# NOTE Save the errors in mongo
+# TODO Save the errors in mongo
+# TODO Send an email when a scraping fails with the error and the screenshots
 
 class ScrapingCancelledError(Exception):
     pass
@@ -62,7 +64,6 @@ def scrape_page(base_url: str, supermarket: str, alive_proxies: list[str], cance
     page = 1
     ROTATE_EVERY = 1
 
-    # REVIEW What do this?
     proxy_cycle = itertools.cycle(alive_proxies) if alive_proxies else None
     current_proxy = next(proxy_cycle) if proxy_cycle else None
     
@@ -161,7 +162,6 @@ def scrape_lider_supermarket(base_url: str, supermarket: str, alive_proxies: lis
     page = 1
     ROTATE_EVERY = 1
 
-    # REVIEW What do this?
     proxy_cycle = itertools.cycle(alive_proxies) if alive_proxies else None
     current_proxy = next(proxy_cycle) if proxy_cycle else None
     
@@ -176,16 +176,16 @@ def scrape_lider_supermarket(base_url: str, supermarket: str, alive_proxies: lis
                 print(f"  Rotated to: {current_proxy}")
 
             if cancel_event.is_set():
-                print(f"  ⚠ {supermarket} — cancelado, saliendo...")
+                print(f"  ⚠ {supermarket} — cancoelad, saliendo...")
                 raise ScrapingCancelledError(f"Cancelado por fallo en otro scraper")
 
             # NOTE main page of lider
             driver.get(base_url)
-            time.sleep(3)
+            time.sleep(random.uniform(3, 7))
 
             try:
                 WebDriverWait(driver, 20).until(
-                    EC.presence_of_element_located((By.CSS_SELECTOR, "[data-testid='HubSpokesNxM']"))
+                    EC.presence_of_element_located((By.CSS_SELECTOR, "[data-testid='HubSpokesNxM']")) #FIXME Esto se va a caer
                 )
             except TimeoutException:
                 print(f'  Timeout on page {page} — title: {driver.title}')
@@ -207,10 +207,148 @@ def scrape_lider_supermarket(base_url: str, supermarket: str, alive_proxies: lis
 
             containerCategories = soup.select("[data-testid='HubSpokesNxM']")
             print('containerCategories searched::: ', len(containerCategories))
+            
+            if not containerCategories:
+                print('  No containerCategories found.')
+                break
 
-            if not products:
-                os.makedirs("log", exist_ok=True)
-                driver.save_screenshot(os.path.join("log", f"no_products_page_{page}.png"))
+            target_link = None
+            for container in containerCategories:
+                target_link = container.select_one("a[link-identifier='Boton despensa_cate_2026.png']")
+                if target_link:
+                    break
+
+            if target_link:
+                target_url = base_url + target_link.get('href')
+                print(f'  Target <a> URL: {target_url}')
+
+                if not target_url:
+                    raise Exception("Target URL not found in the link")
+                
+                time.sleep(random.uniform(2, 8))
+                driver.get(target_url)
+                time.sleep(random.uniform(1, 3))
+
+                try:
+                    WebDriverWait(driver, 20).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, "[link-identifier]"))
+                    )
+                except TimeoutException:
+                    print(f'  Timeout waiting for link-identifier property on page — title: {driver.title}')
+                    cancel_event.set()
+
+                    break
+                except WebDriverException as e:
+                    cancel_event.set()
+
+                    print(f'  WebDriver error: {e.msg}')  # .msg es más limpio que el stacktrace completo
+                    break
+
+                soup = BeautifulSoup(driver.page_source, 'lxml')
+                print('Page loaded, searching for categories...')
+
+                titles = soup.select("h2")
+                allLinks = None
+                for h2 in titles:
+                    print('h2 found::: ', h2.get_text())
+                    if "Para cocinar y disfrutar" in h2.get_text():
+                        parent = h2.find_parent("div")
+                        if not parent:
+                            print('  Parent not found for h2, skipping...')
+                            break
+                        
+                        grandpa = parent.find_parent("section")
+                        if not grandpa:
+                            print('  Grandparent not found for h2, skipping...')
+                            break
+                        
+                        htmlAllLinks = grandpa.select("a")
+                        if not htmlAllLinks:
+                            print('  No <a> found in grandparent, skipping...')
+                            break
+                        
+                        allLinks = [base_url + a.get('href') for a in htmlAllLinks if a.get('href')]
+                        print('Links found::: ', allLinks)
+                        break
+
+                if allLinks:
+                    print(f'  Total categories found: {len(allLinks)}')
+                    
+                    for i, link in enumerate(allLinks):
+                        pageProduct = 1
+                        print(f'  [{i+1}/{len(allLinks)}] Scraping: {link}')
+
+                        while True:
+                            # TODO Add proxypool
+                            if cancel_event.is_set():
+                                print(f"  ⚠ {supermarket} — cancelado, saliendo...")
+                                raise ScrapingCancelledError(f"Cancelado por fallo en otro scraper")
+
+                            url = f"{link}&page={pageProduct}"
+                            print(f'Scraping page {pageProduct} — {url}')
+
+                            time.sleep(random.uniform(2, 10))
+                            driver.get(url)
+
+                            try:
+                                WebDriverWait(driver, 20).until(
+                                    EC.presence_of_element_located((By.CSS_SELECTOR, "[link-identifier]"))
+                                )
+                            except TimeoutException:
+                                cancel_event.set()
+                                print(f'  Timeout on page {pageProduct} — title: {driver.title}')
+                                break
+                            except WebDriverException as e:
+                                cancel_event.set()
+                                print(f'  WebDriver error: {e.msg}')  # .msg es más limpio que el stacktrace completo
+                                break
+
+                            soup = BeautifulSoup(driver.page_source, 'lxml')
+
+                            containerProducts = soup.select('[data-testid="item-stack"]')
+
+                            if not containerProducts:
+                                print('Container not founded, skipping to next category...')
+                                break
+
+                            products = soup.select("div")
+                            print('products searched::: ', products)
+
+
+                            // TODO END THIS
+                            all_products.extend([
+                                {
+                                    "id": str(uuid.uuid4()),
+                                    "name": p.get('[data-automation-id="product-title"]'),
+                                    "price": p.select_one('[data-automation-id="product-price"] div').get_text(strip=True) if p.select_one('[data-automation-id="product-price"] div') else 0,
+                                    "supermarket": "Lider",
+                                    "date": datetime.now().isoformat()
+                                }
+                                for p in products
+                            ])
+
+                            next_page = soup.select_one(f'[data-automation-id="page-number"]')
+                            print("---------------------")
+                            print(supermarket, 'next_page:::', next_page)
+                            print("---------------------")
+                            
+                            if not next_page:
+                                print('No more pages in this category.')
+                                break
+
+                            if page == 2:                       # ← mover al final antes de page += 1
+                                print('Reached page limit.')
+                                break
+
+                            page += 1
+
+                        # delay aleatorio entre categorías
+                        delay = random.uniform(4, 9)
+                        print(f'  Waiting {delay:.1f}s before next category...')
+                        time.sleep(delay)
+                break
+            else:
+                print('  Target <a> not found')
                 break
     finally:
         driver.quit()                             # ← siempre se ejecuta, incluso con error
